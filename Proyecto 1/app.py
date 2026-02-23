@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import joblib
 
+# Importar modelo serializado con joblib
 model = joblib.load("modelo_harrypotter.joblib")
 
 st.set_page_config(page_title="Hogwarts Sorting Hat", page_icon="🧙")
@@ -38,6 +39,7 @@ famous_characters = {
     ]
 }
 
+# Cuestionario
 bravery = st.slider("Bravery", 0, 10, 5)
 intelligence = st.slider("Intelligence", 0, 10, 5)
 loyalty = st.slider("Loyalty", 0, 10, 5)
@@ -53,7 +55,7 @@ blood_status = st.selectbox(
 )
 
 if st.button("Reveal My House 🪄"):
-
+    # Se crea un objeto de tipo estudiante con los datos respondidos por el usuario
     new_student = pd.DataFrame([{
         "Bravery": bravery,
         "Intelligence": intelligence,
@@ -66,10 +68,12 @@ if st.button("Reveal My House 🪄"):
         "Blood_Status": blood_status
     }])
 
+    # Se predice una salida
     prediction = model.predict(new_student)[0]
     probabilities = model.predict_proba(new_student)[0]
     classes = model.classes_
 
+    # Finalmente, se muestra la predicción y se muestra información relacionada al resultado
     st.success(f"🎉 You belong to: {prediction}!")
 
     st.write("### 🏆 Famous Members of Your House")
