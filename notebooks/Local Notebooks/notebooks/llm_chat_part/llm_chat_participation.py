@@ -15,15 +15,24 @@ if __name__ == "__main__":
         api_key=KEY,
     )
 
+    history = []
+
     print(f"Chatting with {MODEL} model at {URL}\n")
 
     while True:
         message = input("> ")
+
+        messages = [{'role': 'system', 'content': SYSTEM_MESSAGE}]
+        messages.extend(history)
+        messages.append({'role': 'user', 'content': message})
+
         response = client.chat.completions.create(
             model=MODEL,
-            messages=[
-                {'role': 'system', 'content': SYSTEM_MESSAGE},
-                {'role': 'user', 'content': message},
-            ]
+            messages=messages
         )
-        print(response.choices[0].message.content)
+
+        reply = response.choices[0].message.content
+        history.append({'role': 'user', 'content': message})
+        history.append({'role': 'assistant', 'content': reply})
+
+        print(reply)
