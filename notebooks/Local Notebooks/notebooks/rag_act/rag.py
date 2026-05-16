@@ -184,7 +184,26 @@ class Assistant:
         conversation messages, and the system prompt. The assistant response is
         appended to history alongside the user message.
         """
-        pass
+        
+        k = k or self.top_k
+        results = retrieve(question, self.index, self.model, self.chunks, k)
+        context = "\n\n---\n\n".join(result["text"] for result in results)
+
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.extend(self.history)
+        messages.append({"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"})
+        
+        response = self.client.chat.completions.create(
+            model=self.llm_model,
+            messages=messages
+        )
+
+        reply = response.choices[0].message.content
+        self.history.append({'role': 'user', 'content': question})
+        self.history.append({'role': 'assistant', 'content': reply})
+
+        return reply
+ 
 
     def clear_history(self) -> None:
         """Empties the conversation history."""
