@@ -1,4 +1,5 @@
 # You might need the following imports. Feel free to change it if you opt for different libraries.
+from __future__ import annotations
 
 import os
 import glob as globmod
@@ -70,7 +71,17 @@ def load_documents(data_dir: str = DEFAULT_DATA_DIR) -> list[Document]:
     as `page_content` and includes metadata for the source file path and
     document type.
     """
-    pass
+
+    files_paths = globmod.glob(os.path.join(data_dir, "**/*.txt"), recursive=True)
+    documents = []
+
+    for file_path in files_paths:
+        with open(file_path, "r", encoding="utf-8") as f:
+            text = f.read()
+        subfolder = os.path.basename(os.path.dirname(file_path))
+        documents.append(Document(page_content=text, metadata={"source_file_path": file_path, "document_type": subfolder}))
+
+    return documents
 
 
 def split_documents(
@@ -83,7 +94,10 @@ def split_documents(
     The resulting chunked Document objects use the configured chunk size and
     overlap while preserving the original document metadata.
     """
-    pass
+    
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+
+    return splitter.split_documents(docs)
 
 
 def build_index(
@@ -95,7 +109,14 @@ def build_index(
     The index contains normalized float32 embeddings generated from each
     chunk's text with the provided embedding model.
     """
-    pass
+    
+    embeddings = embedding_model.encode([chunk.page_content for chunk in chunks], normalize_embeddings=True)
+    
+    dimension = embeddings.shape[1]
+    index = faiss.IndexFlatIP(dimension)
+    index.add(embeddings.astype(np.float32))
+
+    return index
 
 
 def retrieve(
@@ -110,10 +131,25 @@ def retrieve(
     Results are ordered by similarity and include the chunk text, similarity
     score, and metadata for each matching chunk.
     """
-    pass
+    
+    query_embedding = model.encode([query], normalize_embeddings=True).astype(np.float32)
+    scores, indices = index.search(query_embedding, k)
+
+    results = []
+    for (score, idx) in zip(scores[0], indices[0]):
+        results.append({
+            "text": chunks[idx].page_content,
+            "score": score,
+            "metadata": chunks[idx].metadata
+        })
+
+    return results
 
 
-SYSTEM_PROMPT = ""
+SYSTEM_PROMPT = """You are personal digital asssitant. Answer the user's question using ONLY the provided context. Follow these rules: 
+                - If the context doesn't contain the answer, say "I don't have enough information to answer this question."
+                - Be concise and precise.
+                - Do not use prior knowledge outside of the context."""
 
 
 class Assistant:
