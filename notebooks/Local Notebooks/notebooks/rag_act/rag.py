@@ -9,6 +9,7 @@ import faiss
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder
 from openai import OpenAI
 
 # Default configs
@@ -18,6 +19,7 @@ DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_CHUNK_SIZE = 256
 DEFAULT_CHUNK_OVERLAP = 32
 DEFAULT_TOP_K = 4
+DEFAULT_TOP_N = 3
 TAG_TO_DOCTYPE = {
     "/email": "emails",
     "/notes": "notes",
@@ -43,6 +45,8 @@ def resolve_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
         "base_url": config.get("base_url", None),
         "model": config.get("model", DEFAULT_LLM_MODEL),
         "embedding_model": config.get("embedding_model", DEFAULT_EMBEDDING_MODEL),
+        "rerank_model": config.get("rerank_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"),  
+        "top_n": _parse_int_setting("TOP_N", config.get("top_n", DEFAULT_TOP_N)),  
         "top_k": _parse_int_setting(
             "TOP_K",
             config.get("top_k", DEFAULT_TOP_K),
@@ -59,6 +63,8 @@ def resolve_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
 
     if resolved["top_k"] <= 0:
         raise ValueError("TOP_K must be > 0")
+    if resolved["top_n"] <= 0:  
+        raise ValueError("TOP_N must be > 0")
     if resolved["chunk_size"] <= 0:
         raise ValueError("CHUNK_SIZE must be > 0")
     if resolved["chunk_overlap"] < 0:
@@ -152,6 +158,15 @@ def retrieve(
     return results
 
 
+def rerank(query: str, results: list[dict], reranker: CrossEncoder, top_n: int = DEFAULT_TOP_N) -> list[dict]:
+    pairs = [(query, r["text"]) for r in results]
+    scores = reranker.predict(pairs)
+    ranked = sorted(
+        zip(scores, results), key=lambda x: x[0], reverse=True
+    )
+    return [r for _, r in ranked[:top_n]]
+
+
 SYSTEM_PROMPT = """You are personal digital asssitant. Answer the user's question using ONLY the provided context. Follow these rules: 
                 - If the context doesn't contain the answer, say "I don't have enough information to answer this question."
                 - Be concise and precise.
@@ -171,20 +186,23 @@ class Assistant:
             self,
             index: faiss.IndexFlatIP,
             model: SentenceTransformer,
+            reranker: CrossEncoder,
             chunks: list[Document],
             client: OpenAI,
             config: dict[str, Any] | None = None,
     ) -> None:
         self.index = index
         self.model = model
+        self.reranker = reranker
         self.chunks = chunks
         self.client = client
         self.config = resolve_config(config)
         self.llm_model = self.config["model"]
         self.top_k = self.config["top_k"]
+        self.top_n = self.config["top_n"]
         self.history: list[dict[str, str]] = []
 
-    def ask(self, question: str, k: int | None = None) -> str:
+    def ask(self, question: str, k: int | None = None, n: int | None = None) -> str:
         """Generates an answer from the retrieved context and conversation history.
 
         The current question is combined with relevant document chunks, previous
@@ -193,6 +211,9 @@ class Assistant:
         """
         
         k = k or self.top_k
+        n = n or self.top_n
+        if n > k:
+            raise ValueError(f"top_n ({n}) cannot be greater than top_k ({k})")
 
         doc_filter = None
         for tag, dtype in TAG_TO_DOCTYPE.items():
@@ -206,11 +227,12 @@ class Assistant:
 
         if doc_filter:
             results = [r for r in results if r["metadata"]["document_type"] == doc_filter]
-        results = results[:k]
+
+        reranked_results = rerank(question, results, self.reranker, top_n=n)
 
         context = "\n\n---\n\n".join(
             f"[{os.path.basename(r['metadata']['source_file_path'])}]\n{r['text']}"
-            for r in results
+            for r in reranked_results
         )
 
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -221,11 +243,9 @@ class Assistant:
             model=self.llm_model,
             messages=messages
         )
-
         reply = response.choices[0].message.content
         self.history.append({'role': 'user', 'content': question})
         self.history.append({'role': 'assistant', 'content': reply})
-
         return reply
  
 
@@ -257,6 +277,9 @@ class Assistant:
 
         embedding_model = SentenceTransformer(resolved_config["embedding_model"])
 
+        print("Loading Reranker model...")  
+        reranker = CrossEncoder(resolved_config["rerank_model"])
+
         print("Building FAISS index...")
         index = build_index(chunks, embedding_model)
         print(f"  Indexed {index.ntotal} vectors (dim={index.d})")
@@ -269,4 +292,4 @@ class Assistant:
         client = OpenAI(**client_kwargs)
 
         print("Ready!\n")
-        return cls(index, embedding_model, chunks, client, resolved_config)
+        return cls(index, embedding_model, reranker, chunks, client, resolved_config)
