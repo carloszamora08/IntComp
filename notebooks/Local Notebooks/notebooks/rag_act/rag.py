@@ -18,6 +18,12 @@ DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_CHUNK_SIZE = 256
 DEFAULT_CHUNK_OVERLAP = 32
 DEFAULT_TOP_K = 4
+TAG_TO_DOCTYPE = {
+    "/email": "emails",
+    "/notes": "notes",
+    "/sms": "sms",
+    "/calendar": "calendar",
+}
 
 
 def _parse_int_setting(name: str, value: Any) -> int:
@@ -149,7 +155,8 @@ def retrieve(
 SYSTEM_PROMPT = """You are personal digital asssitant. Answer the user's question using ONLY the provided context. Follow these rules: 
                 - If the context doesn't contain the answer, say "I don't have enough information to answer this question."
                 - Be concise and precise.
-                - Do not use prior knowledge outside of the context."""
+                - Do not use prior knowledge outside of the context.
+                - When using information from the context, cite the relevant source using [Source X]. Only cite sources actually used in the answer."""
 
 
 class Assistant:
@@ -186,8 +193,25 @@ class Assistant:
         """
         
         k = k or self.top_k
-        results = retrieve(question, self.index, self.model, self.chunks, k)
-        context = "\n\n---\n\n".join(result["text"] for result in results)
+
+        doc_filter = None
+        for tag, dtype in TAG_TO_DOCTYPE.items():
+            if tag in question:
+                doc_filter = dtype
+                question = question.replace(tag, "").strip()
+                break
+
+        fetch_k = k * 5 if doc_filter else k
+        results = retrieve(question, self.index, self.model, self.chunks, fetch_k)
+
+        if doc_filter:
+            results = [r for r in results if r["metadata"]["document_type"] == doc_filter]
+        results = results[:k]
+
+        context = "\n\n---\n\n".join(
+            f"[{os.path.basename(r['metadata']['source_file_path'])}]\n{r['text']}"
+            for r in results
+        )
 
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         messages.extend(self.history)
